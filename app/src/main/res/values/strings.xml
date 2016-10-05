@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">VS_fabischn_BleSensirion</string>
+    <string name="ble_not_supported">Bluetooth Low Energy (BLE) not supported!</string>
 </resources>
