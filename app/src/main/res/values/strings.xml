@@ -1,6 +1,7 @@
 <resources>
     <string name="app_name">VS_fabischn_BleSensirion</string>
     <string name="ble_not_supported">Bluetooth Low Energy (BLE) not supported!</string>
+    <string name="error_scan_failed">Bluetooth Scan failed</string>
     <string name="label_data">Data:</string>
     <string name="label_device_address">Device address:</string>
     <string name="label_state">State:</string>
