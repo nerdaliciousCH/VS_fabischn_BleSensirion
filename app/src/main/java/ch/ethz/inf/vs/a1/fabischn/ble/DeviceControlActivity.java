@@ -17,6 +17,7 @@
 package ch.ethz.inf.vs.a1.fabischn.ble;
 
 import android.app.Activity;
+import android.bluetooth.BluetoothGatt;
 import android.bluetooth.BluetoothGattCharacteristic;
 import android.bluetooth.BluetoothGattService;
 import android.content.BroadcastReceiver;
@@ -25,17 +26,25 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.ServiceConnection;
+import android.graphics.Color;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.os.SystemClock;
 import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
+import android.widget.Button;
 import android.widget.ExpandableListView;
 import android.widget.SimpleExpandableListAdapter;
 import android.widget.TextView;
 
+import com.jjoe64.graphview.DefaultLabelFormatter;
 import com.jjoe64.graphview.GraphView;
+import com.jjoe64.graphview.GridLabelRenderer;
+import com.jjoe64.graphview.Viewport;
+import com.jjoe64.graphview.series.DataPoint;
+import com.jjoe64.graphview.series.LineGraphSeries;
 import com.jjoe64.graphview.series.Series;
 
 import java.util.ArrayList;
@@ -48,33 +57,41 @@ import java.util.List;
  * communicates with {@code BluetoothLeService}, which in turn interacts with the
  * Bluetooth LE API.
  */
-public class DeviceControlActivity extends Activity implements GraphContainer{
+public class DeviceControlActivity extends Activity implements Button.OnClickListener {
     private final static String TAG = DeviceControlActivity.class.getSimpleName();
 
     public static final String EXTRAS_DEVICE_NAME = "DEVICE_NAME";
     public static final String EXTRAS_DEVICE_ADDRESS = "DEVICE_ADDRESS";
 
+    private final int MAX_SERIES_ELEMENTS = 50; // How many elements should a series at most contain
 
     private TextView mConnectionState;
-    private TextView mDataField;
+    private TextView mDataFieldHumid;
+    private TextView mDataFieldTemp;
+    private Button mBtnHumid;
+    private Button mBtnTemp;
     private String mDeviceName;
     private String mDeviceAddress;
     private GraphView mGraphView;
-    private ExpandableListView mGattServicesList;
     private BluetoothLeService mBluetoothLeService;
-    private ArrayList<ArrayList<BluetoothGattCharacteristic>> mGattCharacteristics =
-            new ArrayList<ArrayList<BluetoothGattCharacteristic>>();
     private boolean mConnected = false;
-    private BluetoothGattCharacteristic mNotifyCharacteristic;
+    private boolean mConnectedHumid = false;
+    private boolean mConnectedTemp = false;
 
-    private final String LIST_NAME = "NAME";
-    private final String LIST_UUID = "UUID";
+    private LineGraphSeries<DataPoint> mSeriesTemp;
+    private LineGraphSeries<DataPoint> mSeriesHumid;
+
+    private BluetoothGattService mServiceHumidity;
+    private BluetoothGattService mServiceTemperature;
+    private BluetoothGattCharacteristic mCharacteristicHumidity;
+    private BluetoothGattCharacteristic mCharacteristicTemperature;
 
     // Code to manage Service lifecycle.
     private final ServiceConnection mServiceConnection = new ServiceConnection() {
 
         @Override
         public void onServiceConnected(ComponentName componentName, IBinder service) {
+            Log.i(TAG, "onServiceConnected");
             mBluetoothLeService = ((BluetoothLeService.LocalBinder) service).getService();
             if (!mBluetoothLeService.initialize()) {
                 Log.e(TAG, "Unable to initialize Bluetooth");
@@ -82,10 +99,12 @@ public class DeviceControlActivity extends Activity implements GraphContainer{
             }
             // Automatically connects to the device upon successful start-up initialization.
             mBluetoothLeService.connect(mDeviceAddress);
+
         }
 
         @Override
         public void onServiceDisconnected(ComponentName componentName) {
+            Log.i(TAG, "onServiceDisconnected");
             mBluetoothLeService = null;
         }
     };
@@ -109,56 +128,96 @@ public class DeviceControlActivity extends Activity implements GraphContainer{
                 updateConnectionState(R.string.disconnected);
                 invalidateOptionsMenu();
                 clearUI();
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        mBtnTemp.setEnabled(false);
+                        mBtnHumid.setEnabled(false);
+                    }
+                });
+
             } else if (BluetoothLeService.ACTION_GATT_SERVICES_DISCOVERED.equals(action)) {
-                // Show all the supported services and characteristics on the user interface.
-                displayGattServices(mBluetoothLeService.getSupportedGattServices());
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        getSHT31ServicesHumidAndTemp();
+                        mBtnTemp.setEnabled(true);
+                        mBtnHumid.setEnabled(true);
+                    }
+                });
+
+
             } else if (BluetoothLeService.ACTION_DATA_AVAILABLE.equals(action)) {
-                displayData(intent.getStringExtra(BluetoothLeService.EXTRA_DATA));
+                String uuid = intent.getStringExtra("uuid");
+                if (uuid.equals(SensirionSHT31UUIDS.UUID_HUMIDITY_CHARACTERISTIC.toString())){
+                    displayHumidData((double) SystemClock.elapsedRealtime()/1e3,intent.getStringExtra(BluetoothLeService.EXTRA_DATA));
+                } else if(uuid.equals(SensirionSHT31UUIDS.UUID_TEMPERATURE_CHARACTERISTIC.toString())){
+                    displayTempData((double) SystemClock.elapsedRealtime()/1e3,intent.getStringExtra(BluetoothLeService.EXTRA_DATA));
+                } else{
+//                    Log.e(TAG, "BroadcastReceiver: got data from unknown characteristic");
+                }
+            } else if (BluetoothLeService.ACTION_CHARACTERISTIC_HUMID_CONNECTED.equals(action)){
+                Log.i(TAG,"received humid ok");
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        mConnectedHumid = true;
+                        mBtnHumid.setText("Disconnect");
+                        mBtnTemp.setEnabled(true);
+                    }
+                });
+
+            } else if (BluetoothLeService.ACTION_CHARACTERISTIC_TEMP_CONNECTED.equals(action)){
+                Log.i(TAG,"received temp ok");
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        mConnectedTemp = true;
+                        mBtnTemp.setText("Disconnect");
+                        mBtnHumid.setEnabled(true);
+                    }
+                });
+
             }
         }
     };
 
-    // If a given GATT characteristic is selected, check for supported features.  This sample
-    // demonstrates 'Read' and 'Notify' features.  See
-    // http://d.android.com/reference/android/bluetooth/BluetoothGatt.html for the complete
-    // list of supported characteristic features.
-    private final ExpandableListView.OnChildClickListener servicesListClickListner =
-            new ExpandableListView.OnChildClickListener() {
-                @Override
-                public boolean onChildClick(ExpandableListView parent, View v, int groupPosition,
-                                            int childPosition, long id) {
-                    if (mGattCharacteristics != null) {
-                        final BluetoothGattCharacteristic characteristic =
-                                mGattCharacteristics.get(groupPosition).get(childPosition);
-                        String uuid = characteristic.getUuid().toString();
-                        mGraphView.setTitle(
-                                SensirionSHT31UUIDS.lookup(uuid, getResources().getString(R.string.unknown_characteristic)));
-                        final int charaProp = characteristic.getProperties();
-                        if ((charaProp | BluetoothGattCharacteristic.PROPERTY_READ) > 0) {
-                            // If there is an active notification on a characteristic, clear
-                            // it first so it doesn't update the data field on the user interface.
-                            if (mNotifyCharacteristic != null) {
-                                mBluetoothLeService.setCharacteristicNotification(
-                                        mNotifyCharacteristic, false);
-                                mNotifyCharacteristic = null;
-                            }
-                            mBluetoothLeService.readCharacteristic(characteristic);
-                        }
-                        if ((charaProp | BluetoothGattCharacteristic.PROPERTY_NOTIFY) > 0) {
-                            mNotifyCharacteristic = characteristic;
-                            mBluetoothLeService.setCharacteristicNotification(
-                                    characteristic, true);
-                        }
-                        return true;
-                    }
-                    return false;
-                }
-    };
-
     private void clearUI() {
-        mGattServicesList.setAdapter((SimpleExpandableListAdapter) null);
-        mDataField.setText(R.string.no_data);
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                mDataFieldHumid.setText(R.string.no_data);
+                mDataFieldTemp.setText(R.string.no_data);
+            }
+        });
+
     }
+
+
+    private void getSHT31ServicesHumidAndTemp(){
+        List<BluetoothGattService> gattServices = mBluetoothLeService.getSupportedGattServices();
+        String uuid;
+        for (BluetoothGattService gattService : gattServices) {
+            uuid = gattService.getUuid().toString();
+            if (uuid.equals(SensirionSHT31UUIDS.UUID_TEMPERATURE_SERVICE.toString())) {
+                mServiceTemperature = gattService;
+
+            } else if (uuid.equals(SensirionSHT31UUIDS.UUID_HUMIDITY_SERVICE.toString())) {
+                mServiceHumidity = gattService;
+            }
+        }
+    }
+
+    public void connectToSHT31Humid(){
+        mCharacteristicHumidity = mServiceHumidity.getCharacteristic(SensirionSHT31UUIDS.UUID_HUMIDITY_CHARACTERISTIC);
+        mBluetoothLeService.setCharacteristicNotification(mCharacteristicHumidity, true);
+    }
+
+    public void connectToSTH31Temp(){
+        mCharacteristicTemperature = mServiceTemperature.getCharacteristic(SensirionSHT31UUIDS.UUID_TEMPERATURE_CHARACTERISTIC);
+        mBluetoothLeService.setCharacteristicNotification(mCharacteristicTemperature, true);
+    }
+
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -171,18 +230,62 @@ public class DeviceControlActivity extends Activity implements GraphContainer{
 
         // Sets up UI references.
         ((TextView) findViewById(R.id.device_address)).setText(mDeviceAddress);
-        mGattServicesList = (ExpandableListView) findViewById(R.id.gatt_services_list);
-        mGattServicesList.setOnChildClickListener(servicesListClickListner);
         mConnectionState = (TextView) findViewById(R.id.connection_state);
-        mDataField = (TextView) findViewById(R.id.data_value);
+        mDataFieldHumid = (TextView) findViewById(R.id.data_value_humid);
+        mDataFieldTemp = (TextView) findViewById(R.id.data_value_temp);
+
+        mBtnHumid = (Button) findViewById(R.id.btn_connect_humid);
+        mBtnHumid.setEnabled(false);
+        mBtnHumid.setOnClickListener(this);
+
+        mBtnTemp = (Button) findViewById(R.id.btn_connect_temp);
+        mBtnTemp.setEnabled(false);
+        mBtnTemp.setOnClickListener(this);
+
         mGraphView = (GraphView) findViewById(R.id.graphview);
-        mGraphView.setTitle("nothing");
+        mSeriesTemp = new LineGraphSeries<>();
+        mSeriesTemp.setColor(Color.BLUE);
+        // TODO setbackground
+        mGraphView.addSeries(mSeriesTemp);
+        mSeriesHumid = new LineGraphSeries<>();
+        mSeriesHumid.setColor(Color.GREEN);
+        mGraphView.getSecondScale().addSeries(mSeriesHumid);
+        // TODO setbackground
+
+        Viewport vp = mGraphView.getViewport();
+        vp.setXAxisBoundsManual(true); // if true, the labels don't update
+        vp.setMinX(0); // use delay to calculate correct delta x
+        vp.setMaxX(30);
+
+
+        GridLabelRenderer glr = mGraphView.getGridLabelRenderer();
+        glr.setGridStyle(GridLabelRenderer.GridStyle.HORIZONTAL);
+        glr.setHorizontalAxisTitle("Time in seconds");
+        glr.setNumHorizontalLabels(4);
+//        glr.setLabelFormatter(new DefaultLabelFormatter() {
+//            @Override
+//            public String formatLabel(double value, boolean isValueX) {
+//                if (isValueX) {
+//                    // show normal x values
+//                    return super.formatLabel(value, true);
+//                } else {
+//                    // show unit for y values
+//                    return super.formatLabel(value, false) + " " + mUnit;
+//                }
+//            }
+//        });
+
+        glr.setLabelVerticalWidth(300); // Labels need enough space
+        glr.reloadStyles();
+
 
         getActionBar().setTitle(mDeviceName);
         getActionBar().setDisplayHomeAsUpEnabled(true);
+        // TODO add progressbar for pending device connection
         Intent gattServiceIntent = new Intent(this, BluetoothLeService.class);
         bindService(gattServiceIntent, mServiceConnection, BIND_AUTO_CREATE);
     }
+
 
     @Override
     protected void onResume() {
@@ -190,7 +293,6 @@ public class DeviceControlActivity extends Activity implements GraphContainer{
         registerReceiver(mGattUpdateReceiver, makeGattUpdateIntentFilter());
         if (mBluetoothLeService != null) {
             final boolean result = mBluetoothLeService.connect(mDeviceAddress);
-            Log.d(TAG, "Connect request result=" + result);
         }
     }
 
@@ -245,72 +347,28 @@ public class DeviceControlActivity extends Activity implements GraphContainer{
         });
     }
 
-    private void displayData(String data) {
+    private void displayHumidData(final double time, final String data) {
         if (data != null) {
-            mDataField.setText(data);
-//            mGraphView.addSeries();
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    mDataFieldHumid.setText(data);
+
+                    mSeriesHumid.appendData(new DataPoint(time,Double.parseDouble(data)), true, MAX_SERIES_ELEMENTS);
+                }
+            });
         }
     }
-
-
-    // TODO Make this generic BLE discovery only show the 2 relevant Services for the assignment.
-    // Demonstrates how to iterate through the supported GATT Services/Characteristics.
-    // In this sample, we populate the data structure that is bound to the ExpandableListView
-    // on the UI.
-    private void displayGattServices(List<BluetoothGattService> gattServices) {
-        if (gattServices == null) return;
-        String uuid = null;
-
-        String unknownServiceString = getResources().getString(R.string.unknown_service);
-        String unknownCharaString = getResources().getString(R.string.unknown_characteristic);
-
-        ArrayList<HashMap<String, String>> gattServiceData = new ArrayList<HashMap<String, String>>();
-        ArrayList<ArrayList<HashMap<String, String>>> gattCharacteristicData
-                = new ArrayList<ArrayList<HashMap<String, String>>>();
-        mGattCharacteristics = new ArrayList<ArrayList<BluetoothGattCharacteristic>>();
-
-        // Loops through available GATT Services.
-        for (BluetoothGattService gattService : gattServices) {
-            HashMap<String, String> currentServiceData = new HashMap<String, String>();
-            uuid = gattService.getUuid().toString();
-            currentServiceData.put(
-                    LIST_NAME, SensirionSHT31UUIDS.lookup(uuid,unknownServiceString));
-            currentServiceData.put(LIST_UUID, uuid);
-            gattServiceData.add(currentServiceData);
-
-            ArrayList<HashMap<String, String>> gattCharacteristicGroupData =
-                    new ArrayList<HashMap<String, String>>();
-            List<BluetoothGattCharacteristic> gattCharacteristics =
-                    gattService.getCharacteristics();
-            ArrayList<BluetoothGattCharacteristic> charas =
-                    new ArrayList<BluetoothGattCharacteristic>();
-
-            // Loops through available Characteristics.
-            for (BluetoothGattCharacteristic gattCharacteristic : gattCharacteristics) {
-                charas.add(gattCharacteristic);
-                HashMap<String, String> currentCharaData = new HashMap<String, String>();
-                uuid = gattCharacteristic.getUuid().toString();
-                currentCharaData.put(
-                        LIST_NAME, SensirionSHT31UUIDS.lookup(uuid, unknownCharaString));
-                currentCharaData.put(LIST_UUID, uuid);
-                gattCharacteristicGroupData.add(currentCharaData);
-            }
-            mGattCharacteristics.add(charas);
-            gattCharacteristicData.add(gattCharacteristicGroupData);
+    private void displayTempData(final double time, final String data) {
+        if (data != null) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    mDataFieldTemp.setText(data);
+                    mSeriesTemp.appendData(new DataPoint(time,Double.parseDouble(data)), true, MAX_SERIES_ELEMENTS);
+                }
+            });
         }
-
-        SimpleExpandableListAdapter gattServiceAdapter = new SimpleExpandableListAdapter(
-                this,
-                gattServiceData,
-                android.R.layout.simple_expandable_list_item_2,
-                new String[] {LIST_NAME, LIST_UUID},
-                new int[] { android.R.id.text1, android.R.id.text2 },
-                gattCharacteristicData,
-                android.R.layout.simple_expandable_list_item_2,
-                new String[] {LIST_NAME, LIST_UUID},
-                new int[] { android.R.id.text1, android.R.id.text2 }
-        );
-        mGattServicesList.setAdapter(gattServiceAdapter);
     }
 
     private static IntentFilter makeGattUpdateIntentFilter() {
@@ -319,16 +377,30 @@ public class DeviceControlActivity extends Activity implements GraphContainer{
         intentFilter.addAction(BluetoothLeService.ACTION_GATT_DISCONNECTED);
         intentFilter.addAction(BluetoothLeService.ACTION_GATT_SERVICES_DISCOVERED);
         intentFilter.addAction(BluetoothLeService.ACTION_DATA_AVAILABLE);
+        intentFilter.addAction(BluetoothLeService.ACTION_CHARACTERISTIC_HUMID_CONNECTED);
+        intentFilter.addAction(BluetoothLeService.ACTION_CHARACTERISTIC_TEMP_CONNECTED);
         return intentFilter;
     }
 
-    @Override
-    public void addValues(double xIndex, float[] values) {
-
-    }
 
     @Override
-    public float[][] getValues() {
-        return new float[0][];
+    public void onClick(View v) {
+        if (v.getId() == R.id.btn_connect_humid){
+            if(!mConnectedHumid) {
+                mBtnTemp.setEnabled(false);
+                mBtnHumid.setText("Connecting...");
+                connectToSHT31Humid();
+            } else{
+                // TODO disconnect chara
+            }
+        }else if (v.getId() == R.id.btn_connect_temp){
+            if(!mConnectedTemp) {
+            mBtnHumid.setEnabled(false);
+            mBtnTemp.setText("Connecting...");
+            connectToSTH31Temp();
+            } else {
+                // TODO disconnect chara
+            }
+        }
     }
 }

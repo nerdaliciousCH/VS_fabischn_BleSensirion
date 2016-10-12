@@ -53,17 +53,41 @@
                   android:layout_width="match_parent"
                   android:layout_height="wrap_content"
                   android:layout_margin="10dp">
+        <Button android:id="@+id/btn_connect_humid"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/connect"/>
         <TextView android:layout_width="wrap_content"
                   android:layout_height="wrap_content"
-                  android:text="@string/label_data"
+                  android:text="@string/label_data_humid"
                   android:textSize="18sp"/>
         <Space android:layout_width="5dp"
                android:layout_height="wrap_content"/>
-        <TextView android:id="@+id/data_value"
+        <TextView android:id="@+id/data_value_humid"
                   android:layout_width="match_parent"
                   android:layout_height="wrap_content"
                   android:text="@string/no_data"
                   android:textSize="18sp"/>
+    </LinearLayout>
+    <LinearLayout android:orientation="horizontal"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_margin="10dp">
+        <Button android:id="@+id/btn_connect_temp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/connect"/>
+        <TextView android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/label_data_temp"
+            android:textSize="18sp"/>
+        <Space android:layout_width="5dp"
+            android:layout_height="wrap_content"/>
+        <TextView android:id="@+id/data_value_temp"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/no_data"
+            android:textSize="18sp"/>
     </LinearLayout>
     <LinearLayout
         android:layout_width="match_parent"
@@ -73,7 +97,4 @@
             android:layout_height="200dip"
             android:id="@+id/graphview" />
     </LinearLayout>
-    <ExpandableListView android:id="@+id/gatt_services_list"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"/>
 </LinearLayout>

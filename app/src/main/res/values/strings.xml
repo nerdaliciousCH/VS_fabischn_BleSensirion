@@ -2,12 +2,17 @@
     <string name="app_name">VS_fabischn_BleSensirion</string>
     <string name="ble_not_supported">Bluetooth Low Energy (BLE) not supported!</string>
     <string name="error_scan_failed">Bluetooth Scan failed</string>
-    <string name="label_data">Data:</string>
+    <string name="label_data_humid">Data (hPa):</string>
+    <string name="label_data_temp">Data (°C):</string>
     <string name="label_device_address">Device address:</string>
     <string name="label_state">State:</string>
     <string name="no_data">No data</string>
     <string name="connected">Connected</string>
+    <string name="connect">Connect</string>
+    <string name="connecting">Connecting...</string>
     <string name="disconnected">Disconnected</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="disconnecting">Disconnecting...</string>
     <string name="title_devices">BLE Device Scan</string>
     <string name="error_bluetooth_not_supported">Bluetooth not supported.</string>
 

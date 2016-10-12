@@ -63,6 +63,10 @@ public class BluetoothLeService extends Service {
             "com.example.bluetooth.le.ACTION_DATA_AVAILABLE";
     public final static String EXTRA_DATA =
             "com.example.bluetooth.le.EXTRA_DATA";
+    public final static String ACTION_CHARACTERISTIC_TEMP_CONNECTED =
+            "ch.ethz.inf.vs.a1.fabischn.ble.ACTION_CHARACTERISTIC_TEMP_CONNECTED";
+    public final static String ACTION_CHARACTERISTIC_HUMID_CONNECTED =
+            "ch.ethz.inf.vs.a1.fabischn.ble.ACTION_CHARACTERISTIC_HUMID_CONNECTED";
 
     // Implements callback methods for GATT events that the app cares about.  For example,
     // connection change and services discovered.
@@ -91,8 +95,6 @@ public class BluetoothLeService extends Service {
         public void onServicesDiscovered(BluetoothGatt gatt, int status) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 broadcastUpdate(ACTION_GATT_SERVICES_DISCOVERED);
-            } else {
-                Log.w(TAG, "onServicesDiscovered received: " + status);
             }
         }
 
@@ -109,7 +111,24 @@ public class BluetoothLeService extends Service {
         public void onCharacteristicChanged(BluetoothGatt gatt,
                                             BluetoothGattCharacteristic characteristic) {
             broadcastUpdate(ACTION_DATA_AVAILABLE, characteristic);
-            Log.w("Updated Data!",Float.toString(convertRawValue(characteristic.getValue())));
+        }
+
+        // We use this callback to asynchronously notify the Service listeners, that the descriptor has been written
+        @Override
+        public void onDescriptorWrite(BluetoothGatt gatt, BluetoothGattDescriptor descriptor, int status) {
+            super.onDescriptorWrite(gatt, descriptor, status);
+            if (status == BluetoothGatt.GATT_SUCCESS){
+                Log.i(TAG, "onDescriptorWrite: " + status);
+                Log.i(TAG, SensirionSHT31UUIDS.lookup(descriptor.getCharacteristic().getUuid().toString(),"unknown")+" Write to descriptor was successful!");
+                if (descriptor.getCharacteristic().getUuid().toString().equals(SensirionSHT31UUIDS.UUID_TEMPERATURE_CHARACTERISTIC.toString())){
+                    broadcastUpdate(ACTION_CHARACTERISTIC_TEMP_CONNECTED, descriptor.getCharacteristic());
+                } else if(descriptor.getCharacteristic().getUuid().toString().equals(SensirionSHT31UUIDS.UUID_HUMIDITY_CHARACTERISTIC.toString())){
+                    broadcastUpdate(ACTION_CHARACTERISTIC_HUMID_CONNECTED, descriptor.getCharacteristic());
+                }
+            }else{
+                Log.i(TAG, "onDescriptorWrite: " + status);
+                Log.i(TAG,SensirionSHT31UUIDS.lookup(descriptor.getCharacteristic().getUuid().toString(),"unknown")+" Write to descriptor failed!!!!");
+            }
         }
     };
 
@@ -127,7 +146,9 @@ public class BluetoothLeService extends Service {
         if (data != null && data.length > 0) {
             final StringBuilder stringBuilder = new StringBuilder(data.length);
             stringBuilder.append(convertRawValue(data));
-            intent.putExtra(EXTRA_DATA, new String(data) + "\n" + stringBuilder.toString());
+            intent.putExtra(EXTRA_DATA, stringBuilder.toString());
+            // TODO putextra which characteristic it was
+            intent.putExtra("uuid", characteristic.getUuid().toString());
         }
         sendBroadcast(intent);
     }
@@ -275,12 +296,13 @@ public class BluetoothLeService extends Service {
             Log.w(TAG, "BluetoothAdapter not initialized");
             return;
         }
-        // TODO is this the right way? At least it works...
         mBluetoothGatt.setCharacteristicNotification(characteristic, enabled);
         BluetoothGattDescriptor descriptor = characteristic.getDescriptor(SensirionSHT31UUIDS.NOTIFICATION_DESCRIPTOR_UUID);
         if (descriptor != null) {
             descriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
             mBluetoothGatt.writeDescriptor(descriptor);
+        }else{
+            Log.e(TAG, "Descriptor was NULL!");
         }
     }
 
