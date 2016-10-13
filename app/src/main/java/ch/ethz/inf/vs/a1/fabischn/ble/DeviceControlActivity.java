@@ -271,7 +271,7 @@ public class DeviceControlActivity extends Activity {
         glr.setVerticalLabelsSecondScaleAlign(Paint.Align.RIGHT);
         glr.setVerticalLabelsColor(colorTemp);
         glr.setVerticalLabelsSecondScaleColor(colorHumid);
-        
+
 
         // Set X axis labels
         glr.setHorizontalAxisTitle("Time in seconds");
