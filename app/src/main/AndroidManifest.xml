@@ -22,7 +22,8 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <activity android:name=".DeviceControlActivity" />
+        <activity android:name=".DeviceControlActivity"
+            android:screenOrientation="portrait"/>
         <service android:name=".BluetoothLeService" android:enabled="true"/>
     </application>
 

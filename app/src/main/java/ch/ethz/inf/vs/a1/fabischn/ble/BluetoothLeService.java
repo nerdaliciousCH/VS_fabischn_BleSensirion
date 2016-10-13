@@ -147,7 +147,7 @@ public class BluetoothLeService extends Service {
             final StringBuilder stringBuilder = new StringBuilder(data.length);
             stringBuilder.append(convertRawValue(data));
             intent.putExtra(EXTRA_DATA, stringBuilder.toString());
-            // TODO putextra which characteristic it was
+//            // TODO putextra which characteristic it was
             intent.putExtra("uuid", characteristic.getUuid().toString());
         }
         sendBroadcast(intent);

@@ -27,6 +27,7 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.ServiceConnection;
 import android.graphics.Color;
+import android.graphics.Paint;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.SystemClock;
@@ -42,6 +43,8 @@ import android.widget.TextView;
 import com.jjoe64.graphview.DefaultLabelFormatter;
 import com.jjoe64.graphview.GraphView;
 import com.jjoe64.graphview.GridLabelRenderer;
+import com.jjoe64.graphview.LegendRenderer;
+import com.jjoe64.graphview.SecondScale;
 import com.jjoe64.graphview.Viewport;
 import com.jjoe64.graphview.series.DataPoint;
 import com.jjoe64.graphview.series.LineGraphSeries;
@@ -57,7 +60,7 @@ import java.util.List;
  * communicates with {@code BluetoothLeService}, which in turn interacts with the
  * Bluetooth LE API.
  */
-public class DeviceControlActivity extends Activity implements Button.OnClickListener {
+public class DeviceControlActivity extends Activity {
     private final static String TAG = DeviceControlActivity.class.getSimpleName();
 
     public static final String EXTRAS_DEVICE_NAME = "DEVICE_NAME";
@@ -68,8 +71,6 @@ public class DeviceControlActivity extends Activity implements Button.OnClickLis
     private TextView mConnectionState;
     private TextView mDataFieldHumid;
     private TextView mDataFieldTemp;
-    private Button mBtnHumid;
-    private Button mBtnTemp;
     private String mDeviceName;
     private String mDeviceAddress;
     private GraphView mGraphView;
@@ -85,6 +86,8 @@ public class DeviceControlActivity extends Activity implements Button.OnClickLis
     private BluetoothGattService mServiceTemperature;
     private BluetoothGattCharacteristic mCharacteristicHumidity;
     private BluetoothGattCharacteristic mCharacteristicTemperature;
+
+    private long mStartTime;
 
     // Code to manage Service lifecycle.
     private final ServiceConnection mServiceConnection = new ServiceConnection() {
@@ -123,26 +126,19 @@ public class DeviceControlActivity extends Activity implements Button.OnClickLis
                 mConnected = true;
                 updateConnectionState(R.string.connected);
                 invalidateOptionsMenu();
+                mStartTime = SystemClock.elapsedRealtime();
             } else if (BluetoothLeService.ACTION_GATT_DISCONNECTED.equals(action)) {
                 mConnected = false;
                 updateConnectionState(R.string.disconnected);
                 invalidateOptionsMenu();
                 clearUI();
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        mBtnTemp.setEnabled(false);
-                        mBtnHumid.setEnabled(false);
-                    }
-                });
 
             } else if (BluetoothLeService.ACTION_GATT_SERVICES_DISCOVERED.equals(action)) {
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
                         getSHT31ServicesHumidAndTemp();
-                        mBtnTemp.setEnabled(true);
-                        mBtnHumid.setEnabled(true);
+                        connectToSTH31Temp();
                     }
                 });
 
@@ -150,31 +146,23 @@ public class DeviceControlActivity extends Activity implements Button.OnClickLis
             } else if (BluetoothLeService.ACTION_DATA_AVAILABLE.equals(action)) {
                 String uuid = intent.getStringExtra("uuid");
                 if (uuid.equals(SensirionSHT31UUIDS.UUID_HUMIDITY_CHARACTERISTIC.toString())){
-                    displayHumidData((double) SystemClock.elapsedRealtime()/1e3,intent.getStringExtra(BluetoothLeService.EXTRA_DATA));
+                    displayHumidData(SystemClock.elapsedRealtime(),intent.getStringExtra(BluetoothLeService.EXTRA_DATA));
                 } else if(uuid.equals(SensirionSHT31UUIDS.UUID_TEMPERATURE_CHARACTERISTIC.toString())){
-                    displayTempData((double) SystemClock.elapsedRealtime()/1e3,intent.getStringExtra(BluetoothLeService.EXTRA_DATA));
+                    displayTempData(SystemClock.elapsedRealtime(),intent.getStringExtra(BluetoothLeService.EXTRA_DATA));
                 } else{
-//                    Log.e(TAG, "BroadcastReceiver: got data from unknown characteristic");
+                    Log.e(TAG, "BroadcastReceiver: got data from unknown characteristic");
                 }
             } else if (BluetoothLeService.ACTION_CHARACTERISTIC_HUMID_CONNECTED.equals(action)){
                 Log.i(TAG,"received humid ok");
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        mConnectedHumid = true;
-                        mBtnHumid.setText("Disconnect");
-                        mBtnTemp.setEnabled(true);
-                    }
-                });
+                mConnectedHumid = true;
 
             } else if (BluetoothLeService.ACTION_CHARACTERISTIC_TEMP_CONNECTED.equals(action)){
                 Log.i(TAG,"received temp ok");
+                mConnectedTemp = true;
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
-                        mConnectedTemp = true;
-                        mBtnTemp.setText("Disconnect");
-                        mBtnHumid.setEnabled(true);
+                        connectToSHT31Humid();
                     }
                 });
 
@@ -234,53 +222,67 @@ public class DeviceControlActivity extends Activity implements Button.OnClickLis
         mDataFieldHumid = (TextView) findViewById(R.id.data_value_humid);
         mDataFieldTemp = (TextView) findViewById(R.id.data_value_temp);
 
-        mBtnHumid = (Button) findViewById(R.id.btn_connect_humid);
-        mBtnHumid.setEnabled(false);
-        mBtnHumid.setOnClickListener(this);
 
-        mBtnTemp = (Button) findViewById(R.id.btn_connect_temp);
-        mBtnTemp.setEnabled(false);
-        mBtnTemp.setOnClickListener(this);
-
+        // Format the GraphView
         mGraphView = (GraphView) findViewById(R.id.graphview);
-        mSeriesTemp = new LineGraphSeries<>();
-        mSeriesTemp.setColor(Color.BLUE);
-        // TODO setbackground
-        mGraphView.addSeries(mSeriesTemp);
-        mSeriesHumid = new LineGraphSeries<>();
-        mSeriesHumid.setColor(Color.GREEN);
-        mGraphView.getSecondScale().addSeries(mSeriesHumid);
-        // TODO setbackground
-
         Viewport vp = mGraphView.getViewport();
-        vp.setXAxisBoundsManual(true); // if true, the labels don't update
-        vp.setMinX(0); // use delay to calculate correct delta x
-        vp.setMaxX(30);
-
-
+        SecondScale ss = mGraphView.getSecondScale();
         GridLabelRenderer glr = mGraphView.getGridLabelRenderer();
-        glr.setGridStyle(GridLabelRenderer.GridStyle.HORIZONTAL);
-        glr.setHorizontalAxisTitle("Time in seconds");
-        glr.setNumHorizontalLabels(4);
-//        glr.setLabelFormatter(new DefaultLabelFormatter() {
-//            @Override
-//            public String formatLabel(double value, boolean isValueX) {
-//                if (isValueX) {
-//                    // show normal x values
-//                    return super.formatLabel(value, true);
-//                } else {
-//                    // show unit for y values
-//                    return super.formatLabel(value, false) + " " + mUnit;
-//                }
-//            }
-//        });
 
-        glr.setLabelVerticalWidth(300); // Labels need enough space
+        int colorTemp = Color.BLUE;
+        int colorHumid = Color.RED;
+
+        mSeriesTemp = new LineGraphSeries<>();
+        mSeriesTemp.setColor(colorTemp);
+        mSeriesTemp.setBackgroundColor(colorTemp);
+//        mSeriesTemp.setDrawBackground(true);
+        mSeriesTemp.setTitle("°C");
+        mGraphView.addSeries(mSeriesTemp);
+
+        mSeriesHumid = new LineGraphSeries<>();
+        mSeriesHumid.setColor(colorHumid);
+        mSeriesHumid.setBackgroundColor(colorHumid);
+//        mSeriesHumid.setDrawBackground(true);
+        mSeriesHumid.setTitle("hPa");
+        ss.addSeries(mSeriesHumid);
+
+        mGraphView.getLegendRenderer().setVisible(true);
+        mGraphView.getLegendRenderer().setBackgroundColor(Color.LTGRAY);
+        mGraphView.getLegendRenderer().setFixedPosition(0,0);
+
+
+        // Set the scales
+        vp.setXAxisBoundsManual(true); // if true, the labels don't update
+        vp.setYAxisBoundsManual(true);
+        vp.setScalableY(false);
+        vp.setScalable(false);
+        vp.setMinX(0);
+        vp.setMaxX(30);
+        vp.setMinY(-40);
+        vp.setMaxY(65);
+        ss.setMinY(0);
+        ss.setMaxY(100);
+
+        glr.setHighlightZeroLines(false);
+        glr.setGridStyle(GridLabelRenderer.GridStyle.HORIZONTAL);
+
+        // Set Y axis labels
+        glr.setNumVerticalLabels(6); // Somehow this affects second scale...
+        glr.setVerticalLabelsSecondScaleAlign(Paint.Align.RIGHT);
+        glr.setVerticalLabelsColor(colorTemp);
+        glr.setVerticalLabelsSecondScaleColor(colorHumid);
+        
+
+        // Set X axis labels
+        glr.setHorizontalAxisTitle("Time in seconds");
+        glr.setNumHorizontalLabels(5);
         glr.reloadStyles();
 
 
         getActionBar().setTitle(mDeviceName);
         getActionBar().setDisplayHomeAsUpEnabled(true);
+
+
         // TODO add progressbar for pending device connection
         Intent gattServiceIntent = new Intent(this, BluetoothLeService.class);
         bindService(gattServiceIntent, mServiceConnection, BIND_AUTO_CREATE);
@@ -347,25 +349,25 @@ public class DeviceControlActivity extends Activity implements Button.OnClickLis
         });
     }
 
-    private void displayHumidData(final double time, final String data) {
+    private void displayHumidData(final long realTime, final String data) {
         if (data != null) {
             runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
                     mDataFieldHumid.setText(data);
 
-                    mSeriesHumid.appendData(new DataPoint(time,Double.parseDouble(data)), true, MAX_SERIES_ELEMENTS);
+                    mSeriesHumid.appendData(new DataPoint((double) (realTime - mStartTime)/1e3,Double.parseDouble(data)), true, MAX_SERIES_ELEMENTS);
                 }
             });
         }
     }
-    private void displayTempData(final double time, final String data) {
+    private void displayTempData(final long realTime, final String data) {
         if (data != null) {
             runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
                     mDataFieldTemp.setText(data);
-                    mSeriesTemp.appendData(new DataPoint(time,Double.parseDouble(data)), true, MAX_SERIES_ELEMENTS);
+                    mSeriesTemp.appendData(new DataPoint((double) (realTime - mStartTime)/1e3,Double.parseDouble(data)), true, MAX_SERIES_ELEMENTS);
                 }
             });
         }
@@ -383,24 +385,4 @@ public class DeviceControlActivity extends Activity implements Button.OnClickLis
     }
 
 
-    @Override
-    public void onClick(View v) {
-        if (v.getId() == R.id.btn_connect_humid){
-            if(!mConnectedHumid) {
-                mBtnTemp.setEnabled(false);
-                mBtnHumid.setText("Connecting...");
-                connectToSHT31Humid();
-            } else{
-                // TODO disconnect chara
-            }
-        }else if (v.getId() == R.id.btn_connect_temp){
-            if(!mConnectedTemp) {
-            mBtnHumid.setEnabled(false);
-            mBtnTemp.setText("Connecting...");
-            connectToSTH31Temp();
-            } else {
-                // TODO disconnect chara
-            }
-        }
-    }
 }
